@@ -45,3 +45,29 @@ TERRA_PATH_LOSS_C = 20.0
 
 # Suy hao do mưa cho liên kết vệ tinh (sử dụng mô hình đơn giản)
 RAIN_FADING_DB = 5 # dB, một giá trị suy hao trung bình, sẽ nâng cấp sau
+
+# --- Tham số Bài toán Hợp đồng & Game Theory ---
+# Tổng tài nguyên mà Vệ tinh có thể phân bổ (ví dụ: băng thông)
+# Giả sử là 100 MHz
+TOTAL_SAT_RESOURCE_B_HZ = 100e6
+
+# Định nghĩa các "Type" của TOs. Type ở đây đại diện cho hiệu quả chuyển đổi
+# tài nguyên thành thông lượng của một TO. TO "tốt" có thể tạo ra nhiều 
+# throughput hơn từ cùng một lượng băng thông.
+# (theta, probability)
+AGENT_TYPES = {
+    'low_efficiency': {
+        'theta': 0.5,  # Có thể tạo ra 0.5 bps/Hz cho mỗi đơn vị tài nguyên chuẩn hóa
+        'prob': 0.5    # 50% TOs là loại này
+    },
+    'high_efficiency': {
+        'theta': 1.0,  # Có thể tạo ra 1.0 bps/Hz cho mỗi đơn vị tài nguyên chuẩn hóa
+        'prob': 0.5    # 50% TOs là loại này
+    }
+}
+
+# Chi phí hoạt động của Vệ tinh khi phân bổ tài nguyên
+# Ví dụ: chi phí năng lượng. Giả sử nó là một hàm bậc hai của tài nguyên được cấp phát.
+# cost = c1 * R + c2 * R^2
+SAT_COST_C1 = 0.01
+SAT_COST_C2 = 0.005
