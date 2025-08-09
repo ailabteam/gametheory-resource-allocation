@@ -2,6 +2,7 @@
 
 import os
 import numpy as np
+import pandas as pd # Thêm pandas để quản lý kết quả
 import matplotlib.pyplot as plt
 
 # Import các module tự định nghĩa
@@ -9,139 +10,159 @@ import config
 import geometry
 import channel
 import contract_solver
+import baselines # Import module mới
 
-def visualize_deployment(satellite_pos, to_positions, all_users, filename="deployment.png"):
-    # (Hàm này không thay đổi, giữ nguyên)
-    plt.figure(figsize=(10, 10))
-    to_x = [pos[0] for pos in to_positions]
-    to_y = [pos[1] for pos in to_positions]
-    plt.scatter(to_x, to_y, c='red', marker='s', s=100, label='Terrestrial Operators (TOs)')
-    user_x = [pos[0] for pos in all_users]
-    user_y = [pos[1] for pos in all_users]
-    plt.scatter(user_x, user_y, c='blue', marker='.', s=10, label='Users')
-    sat_proj_x, sat_proj_y, _ = satellite_pos
-    plt.scatter(sat_proj_x, sat_proj_y, c='green', marker='*', s=200, label=f'Satellite Projection (z={config.SAT_ALTITUDE/1000}km)')
-    plt.title('Network Deployment Scenario')
-    plt.xlabel('X-coordinate (meters)')
-    plt.ylabel('Y-coordinate (meters)')
-    plt.xlim(0, config.AREA_WIDTH)
-    plt.ylim(0, config.AREA_HEIGHT)
-    plt.legend()
-    plt.grid(True)
-    plt.gca().set_aspect('equal', adjustable='box')
-    if not os.path.exists('results'):
-        os.makedirs('results')
-    filepath = os.path.join('results', filename)
-    plt.savefig(filepath, dpi=300)
-    plt.close()
-    print(f"Deployment visualization saved to '{filepath}'")
-
-def run_simulation():
-    """Hàm chính để chạy toàn bộ quá trình mô phỏng."""
-    
-    print("--- Step 1: Deploying Network ---")
-    # (Phần này không thay đổi, giữ nguyên)
-    current_satellite_pos = geometry.get_satellite_position(time_t=1)
-    to_positions = geometry.deploy_terrestrial_operators(config.NUM_TO)
-    all_users_by_to = {}
-    all_users_list = []
-    for i, to_pos in enumerate(to_positions):
-        num_users_this_to = np.random.poisson(config.USERS_PER_TO)
-        users = geometry.deploy_users_around_to(to_pos, num_users_this_to, config.TO_CELL_RADIUS)
-        all_users_by_to[i] = users
-        all_users_list.extend(users)
-    print(f"Deployed {len(to_positions)} TOs and {len(all_users_list)} users.")
-    print(f"Satellite position at t=1s: {current_satellite_pos}\n")
-    visualize_deployment(current_satellite_pos, to_positions, all_users_list)
-    
-    print("--- Step 2: Channel Module Sanity Check ---")
-    # (Phần này không thay đổi, giữ nguyên)
-    if config.NUM_TO > 0 and all_users_by_to.get(0):
-        first_to_pos = to_positions[0]
-        first_user_pos = all_users_by_to[0][0]
-        sat_to_user_gain = channel.get_satellite_channel_gain(current_satellite_pos, first_user_pos)
-        terra_to_user_gain = channel.get_terrestrial_channel_gain(first_to_pos, first_user_pos)
-        print(f"Satellite -> User Channel Gain: {channel.linear_to_db(sat_to_user_gain):.2f} dB")
-        print(f"Terrestrial TO -> User Channel Gain: {channel.linear_to_db(terra_to_user_gain):.2f} dB\n")
-
-    print("--- Step 3: Contract Theory Simulation ---")
-    contract_menu = contract_solver.design_optimal_contracts()
-    
-    if not contract_menu:
-        print("Could not generate an optimal contract menu. Exiting simulation.")
-        return
-
-    print("Principal offers an OPTIMIZED menu of contracts:")
-    for type_name, contract in contract_menu.items():
-        print(f"  - For '{type_name}' agents: {contract}")
-
+def run_simulation_for_one_scenario(scenario_name, num_agents):
+    """
+    Hàm này chạy mô phỏng cho MỘT kịch bản (ví dụ: 'Contract Theory' hoặc 'Centralized').
+    Trả về tổng lợi ích của Principal và Agents.
+    """
+    # Gán ngẫu nhiên type cho các agent
     agent_types_list = list(config.AGENT_TYPES.keys())
     agent_type_probs = [config.AGENT_TYPES[t]['prob'] for t in agent_types_list]
-    assigned_types = np.random.choice(agent_types_list, size=config.NUM_TO, p=agent_type_probs)
-    
+    assigned_types = np.random.choice(agent_types_list, size=num_agents, p=agent_type_probs)
+
     total_principal_utility = 0
     total_agents_utility = 0
     
-    print("\nAgents start choosing contracts...")
-    for i in range(config.NUM_TO):
-        my_true_type_name = assigned_types[i]
-        my_true_theta = config.AGENT_TYPES[my_true_type_name]['theta']
+    # Phân bổ tài nguyên dựa trên kịch bản
+    if scenario_name == 'Contract Theory':
+        contract_menu = contract_solver.design_optimal_contracts()
+        if not contract_menu: return None, None
         
-        # =====================================================================
-        # DEBUG BLOCK: In chi tiết quá trình ra quyết định
-        # =====================================================================
-        if i == 0: # Chỉ in chi tiết cho agent đầu tiên để tránh spam
-            print(f"\n--- DEBUGGING AGENT {i} (True Type: {my_true_type_name}, Theta: {my_true_theta}) ---")
-        
-        best_contract_for_me = None
-        max_utility_for_me = 0.0
-        chosen_contract_name = "Not Participating"
-        
-        for offered_type, contract_option in contract_menu.items():
-            # Tính toán lợi ích
-            utility = contract_solver.get_agent_utility(contract_option, my_true_theta)
+        for i in range(num_agents):
+            my_true_type_name = assigned_types[i]
+            my_true_theta = config.AGENT_TYPES[my_true_type_name]['theta']
             
-            if i == 0: # In chi tiết
-                print(f"  - Considering contract for '{offered_type}':")
-                print(f"    - Contract Details: R={contract_option.R/1e6:.4f} MHz, P={contract_option.P:.4f}")
-                print(f"    - Calculated Utility: {utility:.15f}") # In với độ chính xác cao
-                print(f"    - Current Max Utility: {max_utility_for_me:.15f}")
+            # Agent lựa chọn hợp đồng
+            best_utility = 0.0
+            chosen_contract = None
+            for _, contract_option in contract_menu.items():
+                utility = contract_solver.get_agent_utility(contract_option, my_true_theta)
+                if utility > best_utility:
+                    best_utility = utility
+                    chosen_contract = contract_option
             
-            # Thay đổi điều kiện so sánh, cho phép chọn hợp đồng có lợi ích bằng
-            if utility >= max_utility_for_me:
-                # Thêm một kiểm tra nhỏ để ưu tiên hợp đồng có lợi hơn nếu utility bằng nhau
-                # (ví dụ, nếu cả hai đều là 0, nó sẽ không cập nhật trừ khi có lợi hơn)
-                if abs(utility - max_utility_for_me) > 1e-9 or utility > 0:
-                     max_utility_for_me = utility
-                     best_contract_for_me = contract_option
-                     chosen_contract_name = offered_type
-                     if i == 0:
-                         print("    - DECISION: This is better. Updating choice.")
-                else:
-                     if i == 0:
-                         print("    - DECISION: Utility is not strictly greater. Sticking with current choice.")
-            else:
-                 if i == 0:
-                    print("    - DECISION: Not better. Ignoring.")
+            if chosen_contract:
+                total_agents_utility += best_utility
+                total_principal_utility += contract_solver.get_principal_utility(chosen_contract, my_true_theta)
+
+    elif scenario_name == 'Centralized':
+        R_l_opt, R_h_opt = baselines.solve_centralized_optimal()
+        if R_l_opt is None: return None, None
         
-        if i == 0:
-            print(f"--- END DEBUGGING AGENT {i} ---")
-        # =====================================================================
-        # END DEBUG BLOCK
-        # =====================================================================
+        # Phân bổ tài nguyên và tính lợi ích
+        for i in range(num_agents):
+            my_true_type_name = assigned_types[i]
+            my_true_theta = config.AGENT_TYPES[my_true_type_name]['theta']
+            
+            R_alloc = R_l_opt if my_true_type_name == 'low_efficiency' else R_h_opt
+            
+            # Trong kịch bản tập trung, không có thanh toán (P=0). 
+            # Lợi ích của agent chính là lợi ích từ tài nguyên.
+            # Lợi ích của principal là chi phí (âm).
+            temp_contract = contract_solver.Contract(resource=R_alloc * 1e6, payment=0)
+            
+            agent_benefit = contract_solver._calculate_utility_from_resource(my_true_theta, R_alloc)
+            principal_cost = (config.SAT_COST_C1 * R_alloc + config.SAT_COST_C2 * R_alloc**2)
 
-        print(f"  - TO {i:02d} (True Type: '{my_true_type_name.ljust(15)}') chooses contract for '{chosen_contract_name.ljust(15)}'. "
-              f"Utility: {max_utility_for_me:.3f}")
+            total_agents_utility += agent_benefit
+            total_principal_utility -= principal_cost # Chi phí là lợi ích âm
 
-        if best_contract_for_me is not None:
-            total_agents_utility += max_utility_for_me
-            principal_utility_from_this_agent = contract_solver.get_principal_utility(best_contract_for_me, my_true_theta)
-            total_principal_utility += principal_utility_from_this_agent
+    elif scenario_name == 'Equal Allocation':
+        R_alloc = baselines.solve_equal_allocation(num_agents)
+        # Giả sử Principal không thu tiền trong kịch bản ngây thơ này
+        # hoặc thu một mức giá cố định không đáng kể (P=0)
+        
+        for i in range(num_agents):
+            my_true_type_name = assigned_types[i]
+            my_true_theta = config.AGENT_TYPES[my_true_type_name]['theta']
+            
+            temp_contract = contract_solver.Contract(resource=R_alloc * 1e6, payment=0)
+            agent_benefit = contract_solver.get_agent_utility(temp_contract, my_true_theta)
+            
+            if agent_benefit > 0: # Agent chỉ tham gia nếu có lợi
+                total_agents_utility += agent_benefit
+                total_principal_utility += contract_solver.get_principal_utility(temp_contract, my_true_theta)
 
-    print("\n--- Simulation Summary ---")
-    print(f"Total Principal (Satellite) Utility: {total_principal_utility:.2f}")
-    print(f"Total Agents (Terrestrial) Utility: {total_agents_utility:.2f}")
-    print(f"Total System Welfare (Sum of Utilities): {total_principal_utility + total_agents_utility:.2f}")
+    return total_principal_utility, total_agents_utility
+
+
+def plot_results(df):
+    """Vẽ đồ thị từ DataFrame kết quả."""
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # Lấy danh sách các kịch bản đã chạy
+    scenarios = df['Scenario'].unique()
+    
+    metrics = {
+        'Principal Utility': 'Principal Utility',
+        'Agents Utility': 'Agents Utility',
+        'Social Welfare': 'Social Welfare'
+    }
+    
+    for ax, (title, metric) in zip(axes, metrics.items()):
+        for scenario in scenarios:
+            subset = df[df['Scenario'] == scenario]
+            ax.plot(subset['Num TOs'], subset[metric], marker='o', linestyle='-', label=scenario)
+        ax.set_xlabel('Number of Terrestrial Operators')
+        ax.set_ylabel(f'Total {title}')
+        ax.set_title(f'{title} vs. Number of TOs')
+        ax.legend()
+        ax.set_ylim(bottom=0) # Đảm bảo trục y bắt đầu từ 0
+    
+    plt.tight_layout()
+    filepath = os.path.join('results', 'performance_comparison.png')
+    plt.savefig(filepath, dpi=300)
+    plt.close()
+    print(f"Performance comparison plot saved to '{filepath}'")
+
 
 if __name__ == '__main__':
-    run_simulation()
+    # --- Thiết lập Mô phỏng ---
+    num_simulation_runs = 20 # Chạy 20 lần cho mỗi điểm dữ liệu để lấy trung bình
+    num_tos_range = [5, 10, 15, 20, 25, 30] # Khảo sát số lượng TOs
+    scenarios_to_run = ['Contract Theory', 'Centralized', 'Equal Allocation']
+    
+    all_results = []
+    
+    # --- Vòng lặp Mô phỏng chính ---
+    for n_tos in num_tos_range:
+        print(f"\n--- Running simulations for {n_tos} TOs ---")
+        for scenario in scenarios_to_run:
+            # Lưu kết quả của từng lần chạy để tính trung bình và độ lệch chuẩn
+            run_principal_utils = []
+            run_agents_utils = []
+            
+            for _ in range(num_simulation_runs):
+                p_util, a_util = run_simulation_for_one_scenario(scenario, n_tos)
+                if p_util is not None:
+                    run_principal_utils.append(p_util)
+                    run_agents_utils.append(a_util)
+            
+            # Tính giá trị trung bình
+            avg_p_util = np.mean(run_principal_utils) if run_principal_utils else 0
+            avg_a_util = np.mean(run_agents_utils) if run_agents_utils else 0
+            
+            # Lưu kết quả
+            all_results.append({
+                'Scenario': scenario,
+                'Num TOs': n_tos,
+                'Principal Utility': avg_p_util,
+                'Agents Utility': avg_a_util,
+                'Social Welfare': avg_p_util + avg_a_util
+            })
+            print(f"  - Scenario '{scenario}': Social Welfare = {avg_p_util + avg_a_util:.2f}")
+
+    # --- Xử lý và Trực quan hóa Kết quả ---
+    results_df = pd.DataFrame(all_results)
+    print("\n--- Simulation Results (Averaged) ---")
+    print(results_df)
+    
+    # Lưu kết quả ra file CSV
+    results_df.to_csv('results/simulation_results.csv', index=False)
+    print("\nResults saved to 'results/simulation_results.csv'")
+    
+    # Vẽ đồ thị
+    plot_results(results_df)
